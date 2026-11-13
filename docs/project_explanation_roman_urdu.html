@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="ur-Latn"><head><meta charset="utf-8"><title>Project Explanation (Roman Urdu)</title>
+<link rel="stylesheet" href="style.css"></head><body>
+
+<div class="cover">
+  <h1>Impact of Data Augmentation on CNN Performance and Robustness</h1>
+  <div class="sub">Poore project ki wazahat: Roman Urdu mein · Viva / technical questions ki tayyari</div>
+  <table>
+    <tr><th>Student</th><th>CMS</th></tr>
+    <tr><td>Sohaib Aamir</td><td>538108</td></tr>
+    <tr><td>Abdul Rafeh</td><td>450126</td></tr>
+    <tr><td>Mahmoob Ul Hassan</td><td>624084</td></tr>
+  </table>
+  <div class="meta">CS867 Computer Vision · Fall 2026<br>Submitted to: <b>Dr Jameel Malik</b>, Associate Professor, SEECS</div>
+</div>
+
+<h2>Fehrist (Contents)</h2>
+<ol class="toc">
+  <li>Project ka maqsad: ye topic kahan se aaya</li>
+  <li>Bunyadi concepts (augmentation, overfitting, robustness)</li>
+  <li>Theory: transformation hierarchy aur homogeneous coordinates</li>
+  <li>Point pairs se matrix solve karna (affine least squares, homography DLT)</li>
+  <li>Forward vs inverse warping</li>
+  <li>Interpolation: nearest, bilinear, bicubic</li>
+  <li>Hamari augmentation pipeline (geometric + photometric)</li>
+  <li>Experiment ka design (data, model, training)</li>
+  <li>Results: overfitting, accuracy, robustness, ablations</li>
+  <li>State-of-the-art benchmark (AutoAugment, RandAugment, AugMix, CIFAR-10-C…)</li>
+  <li>Code structure: kaun si file kya karti hai</li>
+  <li>Limitations aur imaandar caveats</li>
+  <li>Viva question bank: sawal + jawab (Roman Urdu)</li>
+  <li>Glossary: zaroori terms</li>
+</ol>
+
+<!-- ============================================================ 1 -->
+<h2>1. Project ka maqsad: ye topic kahan se aaya</h2>
+<p>Lecture 7 (Geometric Transformations) mein, slides 15–16 par (similarity aur affine), Sir ne kaha tha:</p>
+<div class="key"><i>“Toh jo image hai na, uski na ye saari augmentation hai. … But you have to go into the details, and also try to do it on some CNN … that is going to make your inference more robust and more accurate.”</i></div>
+<p>Matlab: jo 3×3 matrices hum lecture mein image ko warp karne ke liye use karte hain (translation, rotation, scale, affine, homography), wahi matrices agar training ke dauran <b>random</b> lagayi jayen to har image ka ek naya version ban jata hai, aur <b>label wahi rehta hai</b> (10° ghoomi hui billi phir bhi billi hai). Isi ko <b>data augmentation</b> kehte hain.</p>
+<p>Task ke 4 hisse the, aur hum ne charon kiye:</p>
+<table>
+<tr><th>Requirement</th><th>Hum ne kya kiya</th></tr>
+<tr><td>Theoretical foundation</td><td>Translation → Euclidean → similarity → affine → homography; DoF aur minimum point pairs; sab NumPy mein scratch se (<code>src/geometry.py</code>)</td></tr>
+<tr><td>Mathematical mechanics</td><td>Forward vs inverse warping (forward mein 45.1% holes); nearest, bilinear, bicubic interpolation scratch se</td></tr>
+<tr><td>CNN par implement</td><td>GPU par har image ke liye random homography + photometric jitter; ResNet-9 CNN, CIFAR-10</td></tr>
+<tr><td>Quantitative proof</td><td>Training curves, accuracy, validation loss, train–test gap, 13 test-time shifts, 3 seeds; phir 8 modern methods ke saath benchmark aur CIFAR-10-C</td></tr>
+</table>
+
+<!-- ============================================================ 2 -->
+<h2>2. Bunyadi concepts</h2>
+<h3>Data augmentation</h3>
+<p>Maujooda training images ko transform kar ke nayi training images banana, aur label same rakhna. Do qisam:</p>
+<ul>
+<li><b>Geometric:</b> pixel ki <i>position</i> badalti hai: translation, rotation, scale, shear, flip, homography. Iske liye <b>warping + interpolation</b> chahiye.</li>
+<li><b>Photometric:</b> pixel ki <i>value</i> badalti hai, position nahi: brightness, contrast, saturation, noise, grayscale. Har output pixel sirf usi input pixel par depend karta hai, isliye warping ki zaroorat nahi.</li>
+</ul>
+<h3>Overfitting</h3>
+<p>Jab model training images ko <b>ratta</b> laga leta hai: train accuracy 100% ho jati hai lekin naye (unseen) images par accuracy kam rehti hai. Hum ise <b>train–test gap</b> se naapte hain = train accuracy − test accuracy. Gap jitna bara, overfitting utni zyada.</p>
+<h3>Robustness</h3>
+<p>Agar test image thodi ghoomi hui, andheri, blurry ya noisy ho (distribution shift), to model ki accuracy kitni girti hai? Robust model ki accuracy kam girti hai.</p>
+<h3>Ye kyun kaam karta hai? (intuition)</h3>
+<p>Augmentation model ko batata hai ke “ye cheezein label par asar nahi dalti”: object thora left ho, thora bara ho, thora ghooma ho, ya roshni kam ho, class wahi hai. Is tarah model asal shape/feature seekhta hai, pixel ki exact position ratta nahi lagata. Ek tarah ka <b>regularizer</b> hai, aur effectively dataset bara ho jata hai (60 epochs = har image ke 60 alag versions).</p>
+
+<!-- ============================================================ 3 -->
+<h2>3. Theory: transformation hierarchy</h2>
+<h3>Homogeneous coordinates kyun?</h3>
+<p>Point (x, y) ko (x, y, 1) likhte hain. Iska faida: <b>translation bhi matrix multiplication</b> ban jata hai (warna translation sirf addition hai), aur saari transformations ko ek doosre se multiply kar ke <b>ek hi 3×3 matrix</b> mein combine kar sakte hain. Homography ke liye teesra component w zaroori hai, kyunki aakhir mein x′ = X/w, y′ = Y/w karte hain.</p>
+<table>
+<tr><th>Transform</th><th>Matrix (top 2 rows)</th><th>DoF</th><th>Min. point pairs</th><th>Kya preserve hota hai</th><th>Augmentation</th></tr>
+<tr><td>Translation</td><td>[1 0 tx; 0 1 ty]</td><td>2</td><td>1</td><td>Sab kuch (sirf position badli)</td><td>Random shift / crop</td></tr>
+<tr><td>Euclidean (rigid)</td><td>[cosθ −sinθ tx; sinθ cosθ ty]</td><td>3</td><td>2</td><td>Lengths, angles</td><td>Rotate + shift</td></tr>
+<tr><td>Similarity</td><td>[s·cosθ −s·sinθ tx; s·sinθ s·cosθ ty]</td><td>4</td><td>2</td><td>Angles, length ratios</td><td>+ zoom in/out</td></tr>
+<tr><td>Affine</td><td>[a b c; d e f]</td><td>6</td><td>3</td><td>Parallel lines parallel rehti hain</td><td>+ shear, aspect, flip</td></tr>
+<tr><td>Homography</td><td>[a b c; d e f; g h 1]</td><td>8</td><td>4</td><td>Sirf straight lines straight</td><td>Viewpoint / perspective</td></tr>
+</table>
+<div class="key"><b>Rule (Sir ka in-class sawal):</b> har point pair (x, y) ↔ (x′, y′) se <b>2 equations</b> milti hain. Isliye minimum pairs = ⌈DoF ÷ 2⌉.<br>
+• Translation: 2 DoF → 1 pair.<br>
+• Rigid: 3 DoF → 1 pair sirf 2 equations deta hai (kam hain), isliye <b>2 pairs</b> chahiye (4 equations, 3 unknowns).<br>
+• Affine: 6 DoF → 3 pairs. Homography: 8 DoF → 4 pairs.<br>
+Lecture mein bhi Sir ne kaha tha: “point nahi hoga, wo actually <b>point pair</b> hoga.”</div>
+<h3>Homography 8 DoF kyun, 9 kyun nahi?</h3>
+<p>3×3 matrix mein 9 numbers hain, lekin homography <b>scale tak defined</b> hai: H aur 2H bilkul same mapping dete hain, kyunki aakhir mein w se divide kar dete hain. Isliye ek entry (h₃₃) ko 1 fix kar dete hain → 8 unknowns (a…h). Sir ne bhi kaha tha: “jo last wala 1 hai, that is defining it up to a scale.”</p>
+<div class="math">⎡wx′⎤   ⎡a b c⎤ ⎡x⎤
+⎢wy′⎥ = ⎢d e f⎥ ⎢y⎥        x′ = (ax + by + c) / (gx + hy + 1)
+⎣ w ⎦   ⎣g h 1⎦ ⎣1⎦        y′ = (dx + ey + f) / (gx + hy + 1)</div>
+<p>g aur h ki wajah se denominator har pixel par alag hota hai → parallel lines aage ja kar mil sakti hain = <b>perspective</b>. Affine mein g = h = 0, denominator hamesha 1, isliye parallel lines parallel rehti hain.</p>
+<p><b>Homography ka physical matlab:</b> agar camera ka <b>center of projection same</b> rahe aur sirf camera ghoome (ya scene ek plane ho), to do images ka rishta ek homography se hota hai. Panorama/mosaic isi par bante hain. Augmentation mein chhoti random H = “wahi object, thore alag angle se dekha gaya”.</p>
+<div class="fig"><img src="../figures/fig_transform_family.png"><div class="cap">Hamara NumPy code: rigid, similarity, affine, homography ek hi image par (inverse warping + bilinear).</div></div>
+
+<!-- ============================================================ 4 -->
+<h2>4. Point pairs se matrix solve karna</h2>
+<h3>Affine: least squares (3 pairs)</h3>
+<p>Har pair se 2 rows banti hain:</p>
+<div class="math">x′ = a·x + b·y + c        →  [x y 1 0 0 0]·p = x′
+y′ = d·x + e·y + f        →  [0 0 0 x y 1]·p = y′       p = [a b c d e f]ᵀ</div>
+<p>3 pairs → 6×6 system A·p = b. Hum <code>np.linalg.lstsq</code> se solve karte hain. Agar zyada pairs hon (noise ke saath) to least squares error ko average kar deta hai. Hamara result: targets par max error <b>~2×10⁻¹³ px</b> (sirf floating-point rounding).</p>
+<h3>Homography: DLT (Direct Linear Transform) + SVD (4 pairs)</h3>
+<p>x′(gx + hy + 1) = ax + by + c ko rearrange karein to har pair se 2 linear equations milti hain jo h ke 9 entries mein linear hain:</p>
+<div class="math">[ −x  −y  −1   0   0   0   x·x′  y·x′  x′ ] · h = 0
+[  0   0   0  −x  −y  −1   x·y′  y·y′  y′ ] · h = 0</div>
+<p>4 pairs → 8×9 matrix A, aur A·h = 0. Trivial jawab h = 0 nahi chahiye, isliye constraint ‖h‖ = 1 lagate hain. Iska hal: A ki <b>SVD</b> karo, <b>sab se chhoti singular value wala right singular vector</b> (Vᵀ ki aakhri row) h hai. Phir h₃₃ se divide kar ke last entry 1 kar dete hain. Hamara max error: <b>~3.5×10⁻¹⁰ px</b>.</p>
+<p><b>Agla qadam (agar Sir poochein):</b> real matching mein kuch pairs galat (outliers) hote hain, to RANSAC use karte hain: random 4 pairs → H → inliers gino → best H rakho.</p>
+<div class="fig"><img src="../figures/fig_point_pairs.png"><div class="cap">3 pairs se affine aur 4 pairs se homography, hamare scratch solver se.</div></div>
+
+<!-- ============================================================ 5 -->
+<h2>5. Forward vs inverse warping</h2>
+<table>
+<tr><th></th><th>Forward warping</th><th>Inverse warping</th></tr>
+<tr><td>Formula</td><td>x′ = H·x (source se target ki taraf “push”)</td><td>x = H⁻¹·x′ (target se poocho “main kahan se aaya?”, “pull”)</td></tr>
+<tr><td>Masla</td><td><b>Holes</b>: kuch target pixels ko koi value nahi milti; kuch par 2 source pixels gir jate hain (overlap)</td><td>Koi hole nahi: har target pixel ek baar visit hota hai</td></tr>
+<tr><td>Hamara measurement</td><td>Zoom 1.35× + rotate 20° → <b>45.1% target pixels khaali</b></td><td>0% holes</td></tr>
+<tr><td>Use</td><td>Kam use hota hai</td><td>Har augmentation library (aur hamari pipeline)</td></tr>
+</table>
+<p><b>Holes kyun banti hain?</b> Zoom-in mein target pixels source pixels se zyada ho jate hain; push karne se har target tak koi pixel nahi pohanchta. Aur source pixel ki nayi position fractional hoti hai; round karne par kai pixels ek hi jagah gir jate hain.</p>
+<p><b>Inverse warping mein naya masla:</b> H⁻¹·x′ aksar do pixels ke <i>beech</i> (fractional location) par girta hai, isliye wahan value nikalne ke liye <b>interpolation</b> chahiye. Aur agar location image ke bahar ho to us pixel ko <b>black (0)</b> bhar dete hain: yehi augmented images ke black corners hain (lecture ki ghoomi hui billi ki tarah).</p>
+<div class="fig"><img src="../figures/fig_forward_vs_inverse.png"><div class="cap">Forward warping mein holes (45.1%) vs inverse warping (0%).</div></div>
+
+<!-- ============================================================ 6 -->
+<h2>6. Interpolation</h2>
+<p>Inverse warping fractional location (x, y) deta hai. Wahan intensity ka andaza lagane ke teen tareeqe, teeno <code>src/geometry.py</code> mein scratch se:</p>
+<h3>Nearest neighbour (1 pixel)</h3>
+<div class="math">f(x, y) = I[ round(y), round(x) ]</div>
+<p>Sab se tez; value copy hoti hai, naye values nahi bante. Edges blocky / jagged (staircase) ho jate hain.</p>
+<h3>Bilinear (4 pixels, 2×2)</h3>
+<p>Pehle x direction mein linear interpolation (2 baar), phir y direction mein. Lecture ke Q11, Q12, Q21, Q22 wala derivation. Agar fractional parts dx, dy hon:</p>
+<div class="math">f = Q11·(1−dx)(1−dy) + Q21·dx·(1−dy) + Q12·(1−dx)·dy + Q22·dx·dy</div>
+<p>Weights ka sum = 1. Smooth result, thora soft/blurry. Zyada tar libraries ka default; hamari pipeline ka default bhi yehi hai.</p>
+<h3>Bicubic (16 pixels, 4×4)</h3>
+<p>Har row ke 4 points par cubic polynomial fit, phir 4 rows ke results par ek aur cubic. Hum <b>Keys kernel (a = −0.5)</b> use karte hain:</p>
+<div class="math">w(t) = (a+2)|t|³ − (a+3)|t|² + 1           agar |t| ≤ 1
+w(t) = a|t|³ − 5a|t|² + 8a|t| − 4a           agar 1 < |t| < 2
+w(t) = 0                                     warna
+f(x, y) = Σᵢ Σⱼ w(x − i)·w(y − j)·I[j, i]</div>
+<p>Sab se sharp edges; lekin negative weights ki wajah se thora <b>overshoot/ringing</b> ho sakta hai (isliye result clip karte hain). Sab se slow.</p>
+<div class="fig"><img src="../figures/fig_interpolation.png"><div class="cap">Same warp (24×24 crop, 10.7× zoom, 10° rotation), teen interpolators.</div></div>
+<p><b>Hamara ablation:</b> CNN ki training mein interpolator badalne se fark bohat chhota tha: nearest 85.9%, bilinear 85.3%, bicubic 86.4% (sirf 1.1 pts ka spread, aur single seed). Augmentation lagane ka faida (+6.9 pts) is se kahin bara hai. Wajah: 32×32 images par warps chhote hain, interpolation ka asar bara nahi hota.</p>
+
+<!-- ============================================================ 7 -->
+<h2>7. Hamari augmentation pipeline</h2>
+<h3>Geometric: har image ke liye ek random homography</h3>
+<div class="math">H = C · P · T · R · Sh · S · F · C⁻¹</div>
+<table>
+<tr><th>Term</th><th>Matlab</th><th>Random range (32×32)</th><th>Lecture transform</th></tr>
+<tr><td>C⁻¹ … C</td><td>Origin ko image ke center par le jao, aakhir mein wapis</td><td>fixed</td><td>Translation</td></tr>
+<tr><td>F</td><td>Horizontal flip</td><td>p = 0.5</td><td>Affine (x ko −1 se scale)</td></tr>
+<tr><td>S</td><td>Uniform scale (zoom)</td><td>0.85 – 1.15</td><td>Similarity</td></tr>
+<tr><td>Sh</td><td>Shear</td><td>±10°</td><td>Affine</td></tr>
+<tr><td>R</td><td>Rotation</td><td>±15°</td><td>Euclidean</td></tr>
+<tr><td>T</td><td>Translation</td><td>±4 px (12.5%)</td><td>Translation</td></tr>
+<tr><td>P</td><td>Perspective (g, h)</td><td>±0.0008 per pixel</td><td>Homography</td></tr>
+</table>
+<ul>
+<li><b>C aur C⁻¹ kyun?</b> Rotation/scale origin (0,0) ke gird hoti hai jo image ka kona hai. Center ke gird ghumane ke liye: center ko origin par lao (C⁻¹), transform karo, wapis le jao (C).</li>
+<li><b>Order matter karta hai:</b> matrix multiplication commutative nahi hai. Right se left apply hota hai: pehle C⁻¹, phir F, S, Sh, R, T, P, aakhir mein C.</li>
+<li><b>Perspective itna chhota kyun (0.0008)?</b> Image center se ~16 px tak jati hai; g·x ≈ 0.0008 × 16 ≈ 0.013, yani denominator ~1.3% badalta hai: halka sa viewpoint change. Zyada karein to object bigar jata hai.</li>
+<li><b>Har image, har epoch naya H:</b> 60 epochs = har image ke 60 alag versions.</li>
+<li><b>Apply kaise:</b> H⁻¹ se har output pixel ka source nikalte hain, phir PyTorch ka <code>grid_sample</code> interpolation karta hai (bilinear default). Ye sab <b>GPU par batch mein</b> hota hai, isliye tez hai. Bahar wale pixels = 0 (black).</li>
+</ul>
+<h3>Photometric</h3>
+<table>
+<tr><th>Operation</th><th>Pixel rule</th><th>Range</th></tr>
+<tr><td>Brightness</td><td>I′ = β·I</td><td>β ∈ [0.7, 1.3]</td></tr>
+<tr><td>Contrast</td><td>I′ = α(I − μ) + μ, μ = mean gray</td><td>α ∈ [0.7, 1.3]</td></tr>
+<tr><td>Saturation</td><td>I′ = s(I − gray) + gray</td><td>s ∈ [0.7, 1.3]</td></tr>
+<tr><td>Sensor noise</td><td>I′ = I + σ·N(0, 1)</td><td>σ ∈ [0, 0.04]</td></tr>
+<tr><td>Grayscale</td><td>I′ = 0.299R + 0.587G + 0.114B</td><td>p = 0.1</td></tr>
+</table>
+<p>Aakhir mein values [0, 1] mein clip, phir CIFAR mean/std se normalize.</p>
+<div class="fig"><img src="../figures/fig_aug_examples.png"><div class="cap">Hamari GPU pipeline ka asal output: CNN yehi images dekhta hai.</div></div>
+
+<!-- ============================================================ 8 -->
+<h2>8. Experiment ka design</h2>
+<h3>Data (CIFAR-10)</h3>
+<ul>
+<li>CIFAR-10: 60,000 color images, 32×32, 10 classes (airplane, car, bird, cat, deer, dog, frog, horse, ship, truck).</li>
+<li>Fixed split (seed 1234): <b>5,000 validation</b> images alag; un mein se <b>10,000 training</b> images (low-data regime: yahan overfitting saaf nazar aati hai).</li>
+<li><b>Official 10,000 test images</b> training ya tuning mein kabhi use nahi hue: sirf aakhir mein report.</li>
+</ul>
+<h3>Model: ResNet-9 style CNN (~6.5M parameters)</h3>
+<div class="math">conv(3→64) → conv(64→128) → maxpool → Residual(128: 2 convs)
+→ conv(128→256) → maxpool → conv(256→512) → maxpool → Residual(512: 2 convs)
+→ global max pool → Linear(512→10) → × 0.125
+(har conv = 3×3 Conv + BatchNorm + ReLU)</div>
+<ul>
+<li><b>Dropout nahi</b>, jaan boojh kar, taake augmentation ka asar saaf dikhe (koi aur regularizer overfitting ko chupa na de).</li>
+<li><b>× 0.125 (logit scaling):</b> ResNet-9 ka standard trick; shuru mein output chhote rehte hain aur training stable rehti hai. Iske baghair hamari training diverge ho gayi thi (loss ~40).</li>
+</ul>
+<h3>Training</h3>
+<table>
+<tr><th>Setting</th><th>Value</th><th>Kyun</th></tr>
+<tr><td>Optimizer</td><td>SGD + Nesterov momentum 0.9</td><td>CIFAR par standard, achi generalization</td></tr>
+<tr><td>Learning rate</td><td>One-cycle, max 0.05</td><td>Pehle LR barhao (warm-up), phir dheere kam: tez convergence</td></tr>
+<tr><td>Weight decay</td><td>5×10⁻⁴</td><td>L2 regularization (sab settings mein same)</td></tr>
+<tr><td>Batch / epochs</td><td>256 / 60</td><td>Sab runs ke liye same</td></tr>
+<tr><td>Gradient clipping</td><td>5</td><td>Stability</td></tr>
+<tr><td>Precision</td><td>bf16 autocast, channels_last</td><td>RTX 4090 par speed</td></tr>
+<tr><td>Seeds</td><td>3 (0, 1, 2)</td><td>Mean ± std report: result luck nahi</td></tr>
+</table>
+<p><b>Compared settings:</b> none · geometric · photometric · geometric + photometric. <b>Sirf augmentation badli</b>, baaki sab (model, data, optimizer, epochs) bilkul same: controlled experiment.</p>
+<p><b>Train accuracy clean training images par naapi</b> (augmented par nahi), isliye train–test gap overfitting ka imaandar measure hai.</p>
+<h3>Robustness suite: 13 test-time shifts</h3>
+<p>Trained model ko retrain kiye baghair test set par deterministic shifts laga kar evaluate kiya: Rotate 15°, Rotate 30°, Translate 4 px, Zoom out 0.8×, Zoom in 1.2×, Shear 15°, Perspective, Horizontal flip, Dark (brightness 0.5), Low contrast 0.4, Gaussian noise σ = 0.08, <b>Blur σ = 1 (kabhi train nahi kiya)</b>, Rotate 15° + dark.</p>
+
+<!-- ============================================================ 9 -->
+<h2>9. Results</h2>
+<h3>Main table (10k training images, 3 seeds ka mean)</h3>
+<table>
+<tr><th>Augmentation</th><th>Train acc.</th><th>Val. acc.</th><th>Val. loss</th><th>Test acc.</th><th>Train–test gap</th><th>13 shifts mean</th></tr>
+<tr><td>None</td><td>100.0%</td><td>79.3%</td><td>0.652</td><td>78.5 ± 0.3%</td><td>21.5 pts</td><td>58.8%</td></tr>
+<tr><td>Geometric</td><td>98.8%</td><td>84.6%</td><td>0.528</td><td>83.6 ± 0.3%</td><td>15.2 pts</td><td>75.2%</td></tr>
+<tr><td>Photometric</td><td>100.0%</td><td>78.9%</td><td>0.689</td><td>77.9 ± 0.1%</td><td>22.1 pts</td><td>64.7%</td></tr>
+<tr><td><b>Geometric + photometric</b></td><td>98.6%</td><td><b>86.0%</b></td><td><b>0.431</b></td><td><b>85.4 ± 0.2%</b></td><td><b>13.2 pts</b></td><td><b>81.3%</b></td></tr>
+</table>
+<div class="key"><b>Teen headline numbers:</b><br>
+• Test accuracy <b>+6.9 pts</b> (78.5 → 85.4)<br>
+• Train–test gap <b>−8.3 pts</b> (21.5 → 13.2): overfitting kam<br>
+• Validation loss <b>−34%</b> (0.652 → 0.431)<br>
+• 13 shifts par mean accuracy <b>+22.5 pts</b> (58.8 → 81.3)</div>
+<div class="fig"><img src="../figures/fig_curves.png"><div class="cap">Training curves: baghair augmentation train acc. 100% lekin validation ~79% par ruk jati hai (ratta). Augmentation ke saath gap band hota hai.</div></div>
+<h3>Curves kaise parhein</h3>
+<ul>
+<li><b>None:</b> train accuracy jaldi 100% → model ne ratta laga liya; validation loss baad mein <i>barhne</i> lagta hai = classic overfitting.</li>
+<li><b>Augmented:</b> train accuracy thori kam (98.6%) kyunki task mushkil ho gaya; lekin validation/test zyada. Kam train accuracy yahan <b>achi</b> baat hai.</li>
+</ul>
+<h3>Robustness</h3>
+<div class="fig"><img src="../figures/fig_robustness.png"><div class="cap">13 shifts par accuracy, har augmentation setting ke liye.</div></div>
+<table>
+<tr><th>Augmentation</th><th>Clean</th><th>Geometric shifts (7)</th><th>Photometric shifts (3)</th><th>Blur (unseen)</th><th>Rotate + dark</th></tr>
+<tr><td>None</td><td>78.5</td><td>64.3</td><td>55.9</td><td>43.4</td><td>38.7</td></tr>
+<tr><td>Geometric</td><td>83.6</td><td>82.1</td><td>61.1</td><td>66.7</td><td>70.7</td></tr>
+<tr><td>Photometric</td><td>77.9</td><td>63.1</td><td>73.0</td><td>56.9</td><td>59.8</td></tr>
+<tr><td>Both</td><td>85.4</td><td>82.6</td><td>80.9</td><td>72.7</td><td>80.8</td></tr>
+</table>
+<ul>
+<li>Geometric augmentation → geometric robustness (64.3 → 82.1).</li>
+<li>Photometric augmentation → lighting/noise robustness (55.9 → 73.0).</li>
+<li>Dono milein to dono milti hain, aur combined shift (rotate + dark) 38.7 → 80.8 (+42.1).</li>
+<li><b>Blur kabhi train nahi kiya</b>, phir bhi 43.4 → 72.7 (+29.3): model ne zyada general features seekhe. Ye sab se strong evidence hai ke faida sirf “jo dekha wahi seekha” nahi.</li>
+</ul>
+<h3>Photometric akele ne clean accuracy kyun nahi barhayi?</h3>
+<p>CIFAR-10 test images ki lighting training jaisi hi hai, isliye clean test par photometric ka faida nahi (77.9 vs 78.5, almost same). Overfitting ki asal wajah position/shape ka ratta hai jo geometric hi todta hai. Lekin photometric ne <b>robustness</b> barhayi (photometric shifts 55.9 → 73.0). Isliye dono saath best hain.</p>
+<h3>Ablations</h3>
+<table>
+<tr><th>Training images</th><th>No augmentation</th><th>Geo + photo</th><th>Faida</th></tr>
+<tr><td>10,000</td><td>78.5</td><td>85.4</td><td>+6.9</td></tr>
+<tr><td>45,000</td><td>87.7</td><td>92.4</td><td>+4.7</td></tr>
+</table>
+<p>Data zyada ho to bhi augmentation faida deta hai (+4.7). Augmented 10k (85.4%) taqreeban utna achha hai jitna 4.5× zyada asli data (87.7%).</p>
+
+<!-- ============================================================ 10 -->
+<h2>10. State-of-the-art benchmark</h2>
+<p>Sawal: kya hamara kaam modern research ke level par hai? Is liye hum ne <b>poora CIFAR-10 (45k train)</b> par <b>9 methods</b> ko <b>bilkul same</b> model/optimizer/epochs ke saath train kiya (2 seeds each, 18 runs), aur standard robustness benchmark <b>CIFAR-10-C</b> par test kiya.</p>
+<h3>Methods (har ek kya karta hai)</h3>
+<table>
+<tr><th>Method</th><th>Saal</th><th>Idea (Roman Urdu)</th></tr>
+<tr><td>Crop + flip</td><td>2016</td><td>4 px padding, random 32×32 crop, horizontal flip. Standard baseline.</td></tr>
+<tr><td><b>Ours</b></td><td>2026</td><td>Random homography + photometric jitter (upar wali pipeline).</td></tr>
+<tr><td>AutoAugment</td><td>2019</td><td>Reinforcement learning se 25 sub-policies dhoondi gayin (har sub-policy = 2 operations + probability + magnitude). Search bohat mehnga tha.</td></tr>
+<tr><td>RandAugment</td><td>2020</td><td>Search khatam: har image par N = 2 random operations, ek global magnitude M = 9. Sirf 2 hyperparameters.</td></tr>
+<tr><td>TrivialAugment</td><td>2021</td><td>Har image par sirf <b>ek</b> random operation, random strength. Zero hyperparameters.</td></tr>
+<tr><td>AugMix</td><td>2020</td><td>3 random augmentation chains ko mix kar ke image banao; original + 2 AugMix views par <b>Jensen–Shannon consistency loss</b> (model teeno par same prediction de). Robustness ke liye bana. CIFAR-10-C se milte-julte operations (noise, blur waghera) exclude karta hai.</td></tr>
+<tr><td>Mixup</td><td>2018</td><td>Do images ko blend karo (λ·x₁ + (1−λ)·x₂), labels bhi usi ratio mein mix.</td></tr>
+<tr><td>CutMix</td><td>2019</td><td>Ek image ka rectangle patch doosri par paste; label area ke ratio se.</td></tr>
+<tr><td>Combined</td><td>–</td><td>TrivialAugment + Random Erasing + CutMix/Mixup: modern training recipe.</td></tr>
+</table>
+<h3>Metrics</h3>
+<ul>
+<li><b>Clean test accuracy</b> (+ <b>flip TTA</b>: test image aur uske flip ki predictions ka average).</li>
+<li><b>ECE (Expected Calibration Error):</b> predictions ko confidence ke 15 bins mein baanto; har bin mein |average confidence − accuracy|, bin size se weighted average. Kam ECE = model ka confidence qabil-e-aitbaar hai (90% confident ho to ~90% sahi ho).</li>
+<li><b>CIFAR-10-C</b> (Hendrycks &amp; Dietterich, ICLR 2019): test set par 15 corruptions × 5 severities = 750,000 images. Families: noise (gaussian, shot, impulse), blur (defocus, glass, motion, zoom), weather (snow, frost, fog, brightness), digital (contrast, elastic, pixelate, JPEG).</li>
+<li><b>mCA</b> = mean corruption accuracy (75 combinations ka average). <b>mCE = 100 − mCA</b> (unnormalised, jaise AugMix paper CIFAR ke liye report karta hai).</li>
+</ul>
+<h3>Results (2 seeds ka mean)</h3>
+<table>
+<tr><th>Method</th><th>Test acc.</th><th>+ flip TTA</th><th>ECE ↓</th><th>Our 13 shifts</th><th>CIFAR-10-C mCA</th></tr>
+<tr><td>Crop + flip</td><td>93.85</td><td>94.25</td><td>1.60</td><td>76.6</td><td>73.0</td></tr>
+<tr><td><b>Ours</b></td><td>93.16</td><td>93.61</td><td>1.28</td><td><b>90.1</b></td><td>86.0 (2nd)</td></tr>
+<tr><td>AutoAugment</td><td><b>94.66</b></td><td>95.05</td><td>0.85</td><td>84.2</td><td>81.0</td></tr>
+<tr><td>RandAugment</td><td>94.63</td><td>94.91</td><td>0.99</td><td>83.0</td><td>81.1</td></tr>
+<tr><td>TrivialAugment</td><td>94.41</td><td>94.90</td><td>0.59</td><td>86.8</td><td>83.3</td></tr>
+<tr><td>AugMix</td><td>94.28</td><td>94.78</td><td><b>0.50</b></td><td>87.8</td><td><b>87.0</b></td></tr>
+<tr><td>Mixup</td><td>93.55</td><td>94.09</td><td>15.80</td><td>78.7</td><td>76.6</td></tr>
+<tr><td>CutMix</td><td>94.06</td><td>94.56</td><td>9.77</td><td>74.7</td><td>70.5</td></tr>
+<tr><td>Combined</td><td>92.94</td><td>93.33</td><td>15.87</td><td>84.2</td><td>81.3</td></tr>
+</table>
+<p>Do seeds ka fark har method mein 0.25 pts se kam: numbers stable hain.</p>
+<h3>CIFAR-10-C family-wise (accuracy %)</h3>
+<table>
+<tr><th>Method</th><th>Noise</th><th>Blur</th><th>Weather</th><th>Digital</th><th>Severity 1</th><th>Severity 5</th></tr>
+<tr><td>Crop + flip</td><td>56.0</td><td>70.2</td><td>83.7</td><td>77.7</td><td>85.6</td><td>56.6</td></tr>
+<tr><td>Ours</td><td><b>84.1</b></td><td>85.4</td><td>89.0</td><td>84.8</td><td>90.8</td><td>77.5</td></tr>
+<tr><td>AugMix</td><td>81.1</td><td><b>87.7</b></td><td><b>89.5</b></td><td><b>88.3</b></td><td>91.9</td><td>79.1</td></tr>
+<tr><td>TrivialAugment</td><td>70.1</td><td>85.3</td><td>88.8</td><td>85.8</td><td>91.1</td><td>72.4</td></tr>
+<tr><td>AutoAugment</td><td>67.3</td><td>80.4</td><td>88.2</td><td>84.5</td><td>89.8</td><td>69.0</td></tr>
+</table>
+<h3>Interpretation: kya kehna hai</h3>
+<ul>
+<li><b>Clean accuracy:</b> AutoAugment/RandAugment best (94.7%). Hamara 93.2% (8th of 9): ~1.5 pts kam.</li>
+<li><b>Robustness (CIFAR-10-C):</b> hamara <b>86.0% → 2nd of 9</b>, sirf AugMix (87.0%) se peeche; AutoAugment (81.0), RandAugment (81.1), TrivialAugment (83.3) se aage; baseline se +13 pts.</li>
+<li><b>Hamare 13 shifts par:</b> hum 1st (90.1%), lekin ye test hamare haq mein biased hai (neeche dekhein).</li>
+<li><b>Calibration:</b> AugMix/TrivialAugment best. Mixup/CutMix ka ECE bohat zyada (10–16%): soft (mixed) labels par train hone se model <b>under-confident</b> ho jata hai. Ye papers mein bhi reported hai, bug nahi.</li>
+<li><b>Trade-off:</b> hamari strong geometric warps (black corners, perspective) clean accuracy thori kam karti hain lekin robustness bohat barhati hain.</li>
+</ul>
+<div class="warn"><b>Imaandar caveats (Sir zaroor pooch sakte hain):</b><br>
+1. <b>Noise overlap:</b> hum training mein Gaussian noise (σ ≤ 0.04) lagate hain, aur CIFAR-10-C ki noise family bhi noise hai. Isliye noise par hamara 84.1% kuch had tak “dekha hua” hai. AugMix jaan boojh kar noise operations exclude karta hai. Agar noise family nikal dein (baqi 12 corruptions): AugMix 88.5, TrivialAugment 86.6, <b>ours 86.4</b>, AutoAugment 84.4, baseline 77.2. Yani tab bhi hum top-3 mein hain aur TrivialAugment ke barabar.<br>
+2. <b>Hamare 13 shifts</b> (rotation, zoom, perspective…) wahi transformations hain jin par hum train karte hain, isliye un par 1st aana expected hai. Isi liye CIFAR-10-C fair test hai.<br>
+3. <b>Contrast weakness:</b> CIFAR-10-C contrast par hum ~80% vs AutoAugment ~91%; hamari contrast range (0.7–1.3) bohat halki hai.</div>
+
+<!-- ============================================================ 11 -->
+<h2>11. Code structure</h2>
+<table>
+<tr><th>File</th><th>Kya karti hai</th></tr>
+<tr><td><code>src/geometry.py</code></td><td>Sirf NumPy: translation, rotation, euclidean, similarity, affine, homography matrices; <code>solve_affine</code> (least squares), <code>solve_homography</code> (DLT + SVD); <code>forward_warp</code> (holes mask ke saath), <code>inverse_warp</code>; <code>interp_nearest</code>, <code>interp_bilinear</code>, <code>interp_bicubic</code> (Keys kernel)</td></tr>
+<tr><td><code>src/demo_transforms.py</code></td><td>Theory figures banata hai (sirf geometry.py se), aur numbers: holes 45.1%, solver errors</td></tr>
+<tr><td><code>src/augment.py</code></td><td>GPU augmentation: <code>random_homographies</code> (H = C·P·T·R·Sh·S·F·C⁻¹), <code>inverse_warp</code> (grid_sample), <code>random_photometric</code>, <code>Augmenter</code> class, test shifts ke liye <code>fixed_homography</code>, <code>gaussian_blur</code></td></tr>
+<tr><td><code>src/train.py</code></td><td>CNN (ResNet-9), data split, training loop, curves, 13-shift robustness; result JSON mein</td></tr>
+<tr><td><code>src/analyze.py</code></td><td>Sab runs ko jama kar ke table + figures</td></tr>
+<tr><td><code>src/train_sota.py</code></td><td>9 methods ka benchmark, ECE, flip TTA, checkpoints</td></tr>
+<tr><td><code>src/eval_cifar10c.py</code></td><td>Har checkpoint ko CIFAR-10-C (750k images) par test</td></tr>
+<tr><td><code>src/analyze_sota.py</code></td><td>Benchmark summary table</td></tr>
+<tr><td><code>run_all.sh</code>, <code>run_sota.sh</code></td><td>Saare experiments ek command se dobara chalane ke liye</td></tr>
+</table>
+<h3>Inverse warp ka core (slide 33 wala code)</h3>
+<div class="code">def inverse_warp(x, H, mode="bilinear"):
+    B, _, h, w = x.shape
+    ys, xs = meshgrid(arange(h), arange(w))
+    dst = stack([xs, ys, ones])         # har output pixel (homogeneous)
+    src = inv(H) @ dst                  # ye kahan se aaya?
+    sx, sy = src[0]/src[2], src[1]/src[2]   # w se divide (homography)
+    grid = normalise(sx, sy)            # [-1, 1] range mein
+    return grid_sample(x, grid, mode)   # interpolation</div>
+<p><code>grid_sample</code> ko normalized coordinates chahiye: −1 = left/top edge, +1 = right/bottom. Hum <code>align_corners=True</code> use karte hain (−1 aur +1 corner pixels ke centers hain). Grid ke bahar wale points zero (black) ho jate hain.</p>
+
+<!-- ============================================================ 12 -->
+<h2>12. Limitations</h2>
+<ul>
+<li>Sirf ek dataset (CIFAR-10), ek architecture (ResNet-9), 60 epochs. Papers WideResNet par 200 epochs train karte hain jahan strong policies ka faida zyada hota hai.</li>
+<li>Hamare 13 shifts training transforms se overlap karte hain → CIFAR-10-C fair test hai.</li>
+<li>Label badalne wale transforms: digits/text mein 6 ↔ 9 (rotation) ya flip label badal sakta hai; ranges task ke hisaab se rakhni chahiye.</li>
+<li>Interpolation ablation single seed par hai.</li>
+<li>Benchmark mein 2 seeds; ideal 3–5.</li>
+<li>Future: ImageNet-C, ViT, learnable warp ranges (spatial transformer / adversarial augmentation), test-time augmentation.</li>
+</ul>
+
+<!-- ============================================================ 13 -->
+<h2 class="pb">13. Viva question bank (sawal + jawab)</h2>
+<p class="small">Jawab chhote rakhein, pehle seedha jawab, phir ek number ya example.</p>
+
+<h3>A. Theory</h3>
+<div class="q"><div class="qq">Q1. Data augmentation kya hai aur label kyun nahi badalta?</div><div class="qa">Training images ko transform kar ke nayi images banana. Hum sirf woh transforms lagate hain jo class nahi badalte: chhoti rotation, shift, zoom, lighting. 15° ghooma hua jahaz phir bhi jahaz hai. Agar transform label badal de (jaise digit 6 ko 180° ghumana) to wo galat augmentation hai.</div></div>
+<div class="q"><div class="qq">Q2. Homogeneous coordinates kyun use karte hain?</div><div class="qa">Taake translation bhi matrix multiplication ban jaye aur saari transformations ek 3×3 matrix mein multiply ho sakein. Homography ke liye teesra component w zaroori hai: x′ = X/w.</div></div>
+<div class="q"><div class="qq">Q3. Har transformation ki DoF aur kitne point pairs chahiye?</div><div class="qa">Translation 2 DoF / 1 pair; rigid 3 / 2; similarity 4 / 2; affine 6 / 3; homography 8 / 4. Har pair 2 equations deta hai, isliye pairs = ⌈DoF/2⌉.</div></div>
+<div class="q"><div class="qq">Q4. Rigid mein 3 DoF hain, to 1.5 pairs kaafi kyun nahi? 2 kyun?</div><div class="qa">Aadha pair nahi hota. 1 pair = 2 equations, 3 unknowns ke liye kam. 2 pairs = 4 equations (overdetermined), least squares se solve.</div></div>
+<div class="q"><div class="qq">Q5. Homography mein 9 entries hain, DoF 8 kyun?</div><div class="qa">Homography scale tak defined hai: H aur kH same mapping dete hain kyunki w se divide karte hain. Isliye h₃₃ = 1 fix → 8 unknowns.</div></div>
+<div class="q"><div class="qq">Q6. Affine aur homography mein farq?</div><div class="qa">Affine ki last row [0 0 1] hai → parallel lines parallel rehti hain, square parallelogram banta hai. Homography mein g, h non-zero → denominator pixel ke saath badalta hai → parallel lines mil sakti hain (perspective), square koi bhi quadrilateral ban sakta hai.</div></div>
+<div class="q"><div class="qq">Q7. Similarity aur Euclidean mein farq?</div><div class="qa">Euclidean = rotation + translation (size same). Similarity = + uniform scale (1 extra DoF). Dono angles preserve karte hain.</div></div>
+<div class="q"><div class="qq">Q8. DLT kaise kaam karta hai? SVD kyun?</div><div class="qa">Har pair se 2 linear equations A·h = 0 banti hain (4 pairs → 8×9). h = 0 trivial hai, isliye ‖h‖ = 1 constraint. ‖Ah‖ minimum karne wala unit vector A ki sab se chhoti singular value ka right singular vector hai (V ka aakhri column). Phir h₃₃ se divide.</div></div>
+<div class="q"><div class="qq">Q9. Zyada point pairs hon (noisy) to?</div><div class="qa">Least squares (ya SVD) sab ko average kar deta hai. Outliers hon to RANSAC: random minimal set → model → inliers count → best model.</div></div>
+<div class="q"><div class="qq">Q10. Homography physically kab valid hai?</div><div class="qa">Jab do images same center of projection se li gayi hon (camera sirf ghooma), ya scene ek plane ho. Isi se panoramas bante hain. Lecture ka last hissa yehi tha: ek projective plane se doosre tak mapping.</div></div>
+<div class="q"><div class="qq">Q11. Center ke gird rotation ke liye C·R·C⁻¹ kyun?</div><div class="qa">Rotation matrix origin (0,0) ke gird ghumata hai, jo image ka kona hai. Pehle center ko origin par lao (C⁻¹), ghumao, wapis le jao (C).</div></div>
+<div class="q"><div class="qq">Q12. Matrices ka order matter karta hai?</div><div class="qa">Haan, matrix multiplication commutative nahi. Pehle rotate phir translate ≠ pehle translate phir rotate. Hum right se left apply karte hain: C⁻¹ pehle, C aakhir mein.</div></div>
+
+<h3>B. Warping aur interpolation</h3>
+<div class="q"><div class="qq">Q13. Forward warping mein holes kyun aate hain?</div><div class="qa">Source pixel ko target par “push” karte hain; nayi position fractional hoti hai aur round karni parti hai. Zoom-in mein target pixels source se zyada hote hain, to kai targets ko kuch nahi milta. Hamare demo mein zoom 1.35× + rotate 20° par 45.1% holes.</div></div>
+<div class="q"><div class="qq">Q14. Inverse warping holes kaise khatam karta hai?</div><div class="qa">Har target pixel x′ ke liye x = H⁻¹·x′ nikalte hain aur wahan interpolate karte hain. Har target exactly ek baar visit hota hai: 0% holes. Source image ke bahar ho to black (0).</div></div>
+<div class="q"><div class="qq">Q15. Bilinear interpolation derive karein.</div><div class="qa">4 neighbours Q11, Q21, Q12, Q22; fractional parts dx, dy. Pehle x mein: R1 = (1−dx)Q11 + dx·Q21, R2 = (1−dx)Q12 + dx·Q22. Phir y mein: f = (1−dy)R1 + dy·R2. Weights ka sum 1.</div></div>
+<div class="q"><div class="qq">Q16. Bicubic mein 16 pixels kyun? Kernel kaun sa?</div><div class="qa">Cubic fit ko har direction mein 4 points chahiye: 4×4 = 16. Keys cubic convolution kernel, a = −0.5. Negative lobes ki wajah se sharp edges lekin overshoot ho sakta hai, isliye clip karte hain.</div></div>
+<div class="q"><div class="qq">Q17. Kaun sa interpolation best hai? CNN par fark?</div><div class="qa">Visual quality: bicubic > bilinear > nearest. CNN ablation: nearest 85.9, bilinear 85.3, bicubic 86.4: sirf 1.1 pts ka spread, single seed. 32×32 par chhote warps mein fark kam hai; augmentation ka hona (+6.9) interpolator ki choice se kahin zyada important hai. Bilinear speed/quality ka acha balance hai, isliye default.</div></div>
+<div class="q"><div class="qq">Q18. Augmented images mein black corners kyun hain? Kya ye nuqsan dete hain?</div><div class="qa">Inverse warp mein source image ke bahar wale pixels = 0. Ye ek kism ka random occlusion hai; model ko seekhna parta hai ke borders important nahi. Lekin ye clean test images se mismatch bhi hai, aur hamari clean accuracy SOTA se thori kam hone ki ek wajah ho sakti hai.</div></div>
+
+<h3>C. Implementation</h3>
+<div class="q"><div class="qq">Q19. Augmentation GPU par kyun?</div><div class="qa">CPU par per-image warping slow hai. Hum poore batch ke 256 random H ek saath bana kar <code>grid_sample</code> se GPU par warp karte hain: tez, aur training GPU ka intezar nahi karti.</div></div>
+<div class="q"><div class="qq">Q20. grid_sample kya karta hai?</div><div class="qa">Har output pixel ke liye ek (x, y) source location leta hai (normalized −1…1) aur wahan input ko interpolate karta hai (nearest/bilinear/bicubic). Ye exactly inverse warping hai. Hum align_corners=True use karte hain.</div></div>
+<div class="q"><div class="qq">Q21. Perspective parameter 0.0008 itna chhota kyun?</div><div class="qa">Image center se ~16 px; g·x ≈ 0.013, yani denominator ~1.3% badalta hai: halka viewpoint change. Zyada karein to 32×32 object bigar kar pehchan mein nahi aata (label noise).</div></div>
+<div class="q"><div class="qq">Q22. Har epoch nayi augmentation kyun? Ek dafa augmented dataset bana lein to?</div><div class="qa">Online (har epoch naya random H) se model har image ke 60 alag versions dekhta hai; fixed offline copies kuch hi versions deti hain aur model unhein bhi ratta laga sakta hai.</div></div>
+<div class="q"><div class="qq">Q23. Contrast formula mein μ kyun?</div><div class="qa">α(I − μ) + μ: mean gray ke gird stretch/compress karte hain, taake average brightness same rahe aur sirf contrast badle.</div></div>
+
+<h3>D. Training aur experiment design</h3>
+<div class="q"><div class="qq">Q24. ResNet-9 kyun? Architecture batayein.</div><div class="qa">CIFAR par tez aur strong (~94% 45k par). 3×3 conv–BN–ReLU blocks, 3 max-pools, 2 residual blocks, global max pool, linear 512→10. ~6.5M parameters.</div></div>
+<div class="q"><div class="qq">Q25. Dropout kyun nahi?</div><div class="qa">Jaan boojh kar: hum sirf augmentation ka asar dekhna chahte the. Dropout bhi overfitting kam karta hai aur asar ko chupa deta.</div></div>
+<div class="q"><div class="qq">Q26. Logits ko 0.125 se multiply kyun?</div><div class="qa">ResNet-9 ka standard trick: shuru mein logits chhote, softmax saturate nahi hota, training stable. Iske baghair aur gradient clipping ke baghair hamari training diverge hui thi (loss ~40).</div></div>
+<div class="q"><div class="qq">Q27. One-cycle LR kya hai?</div><div class="qa">LR pehle 20% steps mein barhta hai (warm-up), phir aahista zero ke qareeb aata hai. Kam epochs mein tez aur achi convergence.</div></div>
+<div class="q"><div class="qq">Q28. Sirf 10k images kyun, poore 50k kyun nahi?</div><div class="qa">Low-data regime mein overfitting saaf dikhti hai, aur augmentation ka asar wahan sab se zyada hota hai. Hum ne 45k par bhi check kiya: faida +4.7 pts, phir bhi hai.</div></div>
+<div class="q"><div class="qq">Q29. Validation aur test alag kyun? Test leakage?</div><div class="qa">Validation (5k) curves aur decisions ke liye; official test set (10k) training ya tuning mein kabhi use nahi hua, sirf aakhir mein report. Split fixed seed 1234 se, sab runs ke liye same.</div></div>
+<div class="q"><div class="qq">Q30. 3 seeds kyun?</div><div class="qa">Taake result luck na ho. Std ~0.1–0.3 pts hai, aur faida 6.9 pts: noise se kahin bara.</div></div>
+<div class="q"><div class="qq">Q31. Train accuracy augmented images par naapi ya clean par?</div><div class="qa">Clean training images par. Isliye train–test gap overfitting ka sahi measure hai.</div></div>
+<div class="q"><div class="qq">Q32. Augmented model ki train accuracy kam kyun hai? Ye bura nahi?</div><div class="qa">Nahi, achha hai: model ratta nahi laga raha. Train 98.6% (100% se kam) lekin test 85.4% (78.5 se zyada). Overfitting kam = gap kam.</div></div>
+
+<h3>E. Results</h3>
+<div class="q"><div class="qq">Q33. Sab se important result kya hai?</div><div class="qa">Geometric + photometric: test 78.5 → 85.4 (+6.9), gap 21.5 → 13.2, val loss −34%, 13 shifts par 58.8 → 81.3.</div></div>
+<div class="q"><div class="qq">Q34. Photometric akele kyun kaam nahi aaya?</div><div class="qa">Clean CIFAR test ki lighting training jaisi hai, to clean accuracy par faida nahi (77.9 vs 78.5). Lekin lighting/noise shifts par 55.9 → 73.0. Har augmentation woh invariance deti hai jo woh simulate karti hai.</div></div>
+<div class="q"><div class="qq">Q35. Kya test shifts par train karna cheating nahi?</div><div class="qa">Partly sahi sawal hai, isliye: (1) blur kabhi train nahi kiya, phir bhi +29.3 pts; (2) humne standard CIFAR-10-C par bhi test kiya, jo kisi ne design nahi kiya hamare liye.</div></div>
+<div class="q"><div class="qq">Q36. Augmentation vs zyada data?</div><div class="qa">Augmented 10k = 85.4%, plain 45k = 87.7%. Augmentation “free data” ki tarah kaam karta hai, lekin asli data ka mukammal mutabadil nahi. Dono saath best: 45k + aug = 92.4%.</div></div>
+
+<h3>F. State of the art</h3>
+<div class="q"><div class="qq">Q37. Kya aapka project state of the art hai?</div><div class="qa">Hum ne 8 modern methods ke saath same setup mein compare kiya. Robustness (CIFAR-10-C) mein hum 2nd of 9 hain (86.0%), AutoAugment/RandAugment/TrivialAugment se aage, sirf AugMix (87.0%) se peeche. Clean accuracy mein ~1.5 pts peeche hain (93.2 vs 94.7). Noise overlap ka caveat bhi hai (Q41).</div></div>
+<div class="q"><div class="qq">Q38. AutoAugment, RandAugment, TrivialAugment mein farq?</div><div class="qa">AutoAugment: RL se policy search (mehnga). RandAugment: search khatam, N ops at magnitude M. TrivialAugment: ek random op, random strength, koi hyperparameter nahi. Teeno ka clean accuracy almost same (94.4–94.7).</div></div>
+<div class="q"><div class="qq">Q39. AugMix ka JSD loss kya hai?</div><div class="qa">Ek image ke 3 versions (clean + 2 AugMix) par model ki predictions p₀, p₁, p₂. Jensen–Shannon divergence unhein ek doosre ke qareeb rakhta hai (consistency). Loss = cross-entropy + 12 × JSD. Isi liye AugMix 3 forward passes karta hai aur slow hai (~15 min/run vs ~3–4).</div></div>
+<div class="q"><div class="qq">Q40. Mixup/CutMix ka ECE itna zyada kyun?</div><div class="qa">Soft labels (jaise 0.6 cat + 0.4 dog) par train hote hain, to model hamesha thora kam confident rehta hai: accuracy zyada lekin confidence kam = under-confidence = high ECE. Ye literature mein bhi reported hai.</div></div>
+<div class="q"><div class="qq">Q41. Noise corruptions par aap itne ache kyun hain?</div><div class="qa">Imaandari se: hamari photometric pipeline Gaussian noise (σ ≤ 0.04) lagati hai, jo CIFAR-10-C ki noise family se milti hai. Noise family nikal dein to: AugMix 88.5, TrivialAugment 86.6, hum 86.4: phir bhi top-3, aur baseline (77.2) se +9.</div></div>
+<div class="q"><div class="qq">Q42. Aapki clean accuracy SOTA se kam kyun?</div><div class="qa">Strong geometric warps (perspective, black corners) clean test images se mismatch banati hain; ranges tune nahi kiye; aur hum random crop use nahi karte. Ye ek trade-off hai: thori clean accuracy ke badle bohat zyada robustness.</div></div>
+<div class="q"><div class="qq">Q43. Contrast par kamzor kyun?</div><div class="qa">Hamari contrast range 0.7–1.3 hai; CIFAR-10-C ki contrast corruption bohat shadeed hai. AutoAugment/TrivialAugment mein strong contrast/autocontrast operations hain. Fix: contrast range barhana.</div></div>
+<div class="q"><div class="qq">Q44. mCE kya hai?</div><div class="qa">Mean corruption error = 100 − mCA (unnormalised, CIFAR ke liye AugMix paper jaisa). ImageNet-C par AlexNet se normalize karte hain, CIFAR par nahi.</div></div>
+<div class="q"><div class="qq">Q45. Flip TTA kya hai?</div><div class="qa">Test-time augmentation: test image aur uske horizontal flip dono par predict karke probabilities average. Sab methods ko ~0.3–0.5 pts deta hai.</div></div>
+
+<h3>G. General</h3>
+<div class="q"><div class="qq">Q46. Augmentation kab nuqsan karta hai?</div><div class="qa">Jab label badal de (6 ↔ 9, text flip), ya itna strong ho ke object pehchan mein na aaye. Ranges task ke hisaab se chunni chahiye.</div></div>
+<div class="q"><div class="qq">Q47. Homography augmentation research mein kahan use hota hai?</div><div class="qa">SuperPoint ki homographic adaptation (self-supervised keypoints), image stitching/panoramas, aur document/scene viewpoint robustness.</div></div>
+<div class="q"><div class="qq">Q48. Agar dobara karein to kya behtar karenge?</div><div class="qa">Contrast range barhayein, noise overlap hata kar CIFAR-10-C fair rakhein, random crop add karein, zyada seeds/epochs, WideResNet/ViT, ImageNet-C, aur learnable warp ranges.</div></div>
+<div class="q"><div class="qq">Q49. Kya aap ne libraries use ki ya khud likha?</div><div class="qa">Theory (matrices, solvers, forward/inverse warp, teeno interpolations) NumPy mein khud likha. CNN pipeline mein khud ka random homography generator; interpolation PyTorch ka grid_sample (wahi teen modes). SOTA methods torchvision ki reference implementations hain, taake comparison fair rahe.</div></div>
+<div class="q"><div class="qq">Q50. Results reproduce kaise karein?</div><div class="qa"><code>bash run_all.sh</code> (main study, ~1 h RTX 4090) aur <code>bash run_sota.sh</code> (benchmark, ~1.5 h). Har run ka JSON <code>results/</code> mein hai; deck bhi in files se automatically banta hai.</div></div>
+
+<!-- ============================================================ 14 -->
+<h2>14. Glossary</h2>
+<table>
+<tr><th>Term</th><th>Matlab</th></tr>
+<tr><td>DoF</td><td>Degrees of freedom: matrix ke independent unknowns</td></tr>
+<tr><td>Point pair / correspondence</td><td>Ek point (x, y) aur doosri image mein uska match (x′, y′)</td></tr>
+<tr><td>DLT</td><td>Direct Linear Transform: homography ko linear system A·h = 0 bana kar SVD se solve karna</td></tr>
+<tr><td>SVD</td><td>Singular value decomposition: A = UΣVᵀ</td></tr>
+<tr><td>Warping</td><td>Image ke pixels ko transformation ke mutabiq nayi jagah le jana</td></tr>
+<tr><td>Interpolation</td><td>Fractional location par intensity ka andaza</td></tr>
+<tr><td>Overfitting</td><td>Training data ka ratta; unseen data par kharab</td></tr>
+<tr><td>Train–test gap</td><td>Train accuracy − test accuracy</td></tr>
+<tr><td>Validation loss</td><td>Held-out data par cross-entropy loss</td></tr>
+<tr><td>Epoch</td><td>Poore training set par ek pass</td></tr>
+<tr><td>Seed</td><td>Random number generator ki starting value (repeatability)</td></tr>
+<tr><td>Distribution shift</td><td>Test data training data se mukhtalif ho (rotation, dark, blur…)</td></tr>
+<tr><td>Ablation</td><td>Ek cheez badal kar uska asar alag se naapna</td></tr>
+<tr><td>ECE</td><td>Expected calibration error: confidence vs accuracy ka farq</td></tr>
+<tr><td>mCA / mCE</td><td>CIFAR-10-C par mean corruption accuracy / error</td></tr>
+<tr><td>TTA</td><td>Test-time augmentation</td></tr>
+<tr><td>JSD</td><td>Jensen–Shannon divergence (AugMix ka consistency loss)</td></tr>
+<tr><td>Logit</td><td>Softmax se pehle model ka raw output</td></tr>
+<tr><td>bf16</td><td>16-bit floating point format: tez training</td></tr>
+</table>
+</body></html>

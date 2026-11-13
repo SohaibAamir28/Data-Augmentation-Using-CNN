@@ -1,0 +1,12 @@
+{
+  "forward_warp_hole_percent": 45.1,
+  "roundtrip_rmse_by_interpolator": {
+    "nearest": 7.17,
+    "bilinear": 7.55,
+    "bicubic": 4.01
+  },
+  "point_pair_fit_max_error_px": {
+    "affine": 1.8829382497642655e-13,
+    "homography": 3.460058906057384e-10
+  }
+}

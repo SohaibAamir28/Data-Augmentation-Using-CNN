@@ -1,0 +1,290 @@
+[
+ {
+  "method": "baseline",
+  "label": "Crop + flip (standard baseline)",
+  "seeds": 2,
+  "test_acc": 93.85,
+  "test_acc_std": 0.07,
+  "test_acc_tta": 94.25,
+  "test_acc_tta_std": 0.27,
+  "ece": 1.6,
+  "ece_std": 0.11,
+  "shift_mean": 76.56,
+  "shift_mean_std": 0.36,
+  "val_loss": 0.19,
+  "val_loss_std": 0.0,
+  "mCA": 72.95,
+  "mCA_std": 0.19,
+  "by_group": {
+   "noise": 56.03,
+   "blur": 70.16,
+   "weather": 83.68,
+   "digital": 77.72
+  },
+  "by_severity": [
+   85.59,
+   80.25,
+   74.81,
+   67.52,
+   56.62
+  ],
+  "c10c_seeds": 2,
+  "minutes": 3.4
+ },
+ {
+  "method": "ours",
+  "label": "Ours: homography + photometric",
+  "seeds": 2,
+  "test_acc": 93.16,
+  "test_acc_std": 0.12,
+  "test_acc_tta": 93.61,
+  "test_acc_tta_std": 0.12,
+  "ece": 1.28,
+  "ece_std": 0.16,
+  "shift_mean": 90.09,
+  "shift_mean_std": 0.02,
+  "val_loss": 0.19,
+  "val_loss_std": 0.01,
+  "mCA": 85.96,
+  "mCA_std": 0.06,
+  "by_group": {
+   "noise": 84.14,
+   "blur": 85.44,
+   "weather": 89.03,
+   "digital": 84.78
+  },
+  "by_severity": [
+   90.81,
+   89.41,
+   87.85,
+   84.26,
+   77.47
+  ],
+  "c10c_seeds": 2,
+  "minutes": 4.2
+ },
+ {
+  "method": "autoaugment",
+  "label": "AutoAugment (2019)",
+  "seeds": 2,
+  "test_acc": 94.66,
+  "test_acc_std": 0.04,
+  "test_acc_tta": 95.05,
+  "test_acc_tta_std": 0.05,
+  "ece": 0.85,
+  "ece_std": 0.1,
+  "shift_mean": 84.25,
+  "shift_mean_std": 0.23,
+  "val_loss": 0.15,
+  "val_loss_std": 0.0,
+  "mCA": 80.95,
+  "mCA_std": 0.0,
+  "by_group": {
+   "noise": 67.34,
+   "blur": 80.35,
+   "weather": 88.22,
+   "digital": 84.51
+  },
+  "by_severity": [
+   89.82,
+   86.66,
+   82.83,
+   76.51,
+   68.95
+  ],
+  "c10c_seeds": 2,
+  "minutes": 5.9
+ },
+ {
+  "method": "randaugment",
+  "label": "RandAugment (2020)",
+  "seeds": 2,
+  "test_acc": 94.63,
+  "test_acc_std": 0.02,
+  "test_acc_tta": 94.91,
+  "test_acc_tta_std": 0.05,
+  "ece": 0.99,
+  "ece_std": 0.05,
+  "shift_mean": 83.02,
+  "shift_mean_std": 0.0,
+  "val_loss": 0.16,
+  "val_loss_std": 0.0,
+  "mCA": 81.07,
+  "mCA_std": 0.22,
+  "by_group": {
+   "noise": 69.37,
+   "blur": 79.94,
+   "weather": 88.47,
+   "digital": 83.61
+  },
+  "by_severity": [
+   90.51,
+   87.47,
+   83.28,
+   77.11,
+   67.0
+  ],
+  "c10c_seeds": 2,
+  "minutes": 3.1
+ },
+ {
+  "method": "trivialaugment",
+  "label": "TrivialAugment (2021)",
+  "seeds": 2,
+  "test_acc": 94.41,
+  "test_acc_std": 0.03,
+  "test_acc_tta": 94.9,
+  "test_acc_tta_std": 0.04,
+  "ece": 0.59,
+  "ece_std": 0.0,
+  "shift_mean": 86.77,
+  "shift_mean_std": 0.24,
+  "val_loss": 0.15,
+  "val_loss_std": 0.0,
+  "mCA": 83.34,
+  "mCA_std": 0.04,
+  "by_group": {
+   "noise": 70.09,
+   "blur": 85.32,
+   "weather": 88.83,
+   "digital": 85.77
+  },
+  "by_severity": [
+   91.09,
+   88.45,
+   84.92,
+   79.75,
+   72.44
+  ],
+  "c10c_seeds": 2,
+  "minutes": 4.2
+ },
+ {
+  "method": "augmix",
+  "label": "AugMix + JSD (2020)",
+  "seeds": 2,
+  "test_acc": 94.28,
+  "test_acc_std": 0.09,
+  "test_acc_tta": 94.78,
+  "test_acc_tta_std": 0.04,
+  "ece": 0.5,
+  "ece_std": 0.08,
+  "shift_mean": 87.85,
+  "shift_mean_std": 0.1,
+  "val_loss": 0.15,
+  "val_loss_std": 0.0,
+  "mCA": 87.0,
+  "mCA_std": 0.13,
+  "by_group": {
+   "noise": 81.06,
+   "blur": 87.69,
+   "weather": 89.48,
+   "digital": 88.28
+  },
+  "by_severity": [
+   91.92,
+   90.45,
+   88.59,
+   84.93,
+   79.09
+  ],
+  "c10c_seeds": 2,
+  "minutes": 15.3
+ },
+ {
+  "method": "mixup",
+  "label": "Mixup (2018)",
+  "seeds": 2,
+  "test_acc": 93.55,
+  "test_acc_std": 0.22,
+  "test_acc_tta": 94.09,
+  "test_acc_tta_std": 0.21,
+  "ece": 15.8,
+  "ece_std": 0.41,
+  "shift_mean": 78.66,
+  "shift_mean_std": 0.64,
+  "val_loss": 0.33,
+  "val_loss_std": 0.01,
+  "mCA": 76.6,
+  "mCA_std": 0.87,
+  "by_group": {
+   "noise": 57.84,
+   "blur": 75.47,
+   "weather": 87.19,
+   "digital": 81.23
+  },
+  "by_severity": [
+   86.64,
+   82.45,
+   78.15,
+   72.09,
+   63.69
+  ],
+  "c10c_seeds": 2,
+  "minutes": 3.9
+ },
+ {
+  "method": "cutmix",
+  "label": "CutMix (2019)",
+  "seeds": 2,
+  "test_acc": 94.06,
+  "test_acc_std": 0.02,
+  "test_acc_tta": 94.56,
+  "test_acc_tta_std": 0.09,
+  "ece": 9.77,
+  "ece_std": 0.07,
+  "shift_mean": 74.66,
+  "shift_mean_std": 0.66,
+  "val_loss": 0.25,
+  "val_loss_std": 0.0,
+  "mCA": 70.45,
+  "mCA_std": 0.5,
+  "by_group": {
+   "noise": 47.53,
+   "blur": 67.89,
+   "weather": 83.97,
+   "digital": 76.69
+  },
+  "by_severity": [
+   85.16,
+   78.89,
+   72.12,
+   64.19,
+   51.89
+  ],
+  "c10c_seeds": 2,
+  "minutes": 3.6
+ },
+ {
+  "method": "combined",
+  "label": "TrivialAugment + Erasing + CutMix/Mixup",
+  "seeds": 2,
+  "test_acc": 92.94,
+  "test_acc_std": 0.15,
+  "test_acc_tta": 93.33,
+  "test_acc_tta_std": 0.11,
+  "ece": 15.87,
+  "ece_std": 0.81,
+  "shift_mean": 84.16,
+  "shift_mean_std": 0.08,
+  "val_loss": 0.35,
+  "val_loss_std": 0.01,
+  "mCA": 81.33,
+  "mCA_std": 0.12,
+  "by_group": {
+   "noise": 65.7,
+   "blur": 83.48,
+   "weather": 87.66,
+   "digital": 84.59
+  },
+  "by_severity": [
+   89.54,
+   86.78,
+   82.95,
+   77.53,
+   69.89
+  ],
+  "c10c_seeds": 2,
+  "minutes": 4.1
+ }
+]
